@@ -6,7 +6,7 @@ from plotly.subplots import make_subplots
 
 # Set page to wide mode
 st.set_page_config(layout="wide")
-st.title("?? 2D Colormap 3-Way Comparison Tool")
+st.title("🔬 2D Colormap 3-Way Comparison Tool")
 st.write("For Mesh Convergence Analysis")
 
 # --- 1. File Definitions ---
@@ -24,23 +24,31 @@ def load_data(file_dict):
     Loads, merges, and processes data from multiple CSV files.
     """
     dfs = {}
+    base_params = None
+    
     try:
         for label, filename in file_dict.items():
             df = pd.read_csv(filename)
             df.columns = df.columns.str.strip()
-            # Rename columns to include the label
+            
+            # Get parameter columns (all except axes)
             params = [col for col in df.columns if col not in ['h_fib', 'lda0']]
+            
+            # Set base_params from the first file loaded
+            if base_params is None:
+                base_params = sorted(params) # e.g., ['Absorptance', 'Reflectance_port_1', ...]
+            
+            # Rename columns to include the file label
+            # e.g., 'Reflectance_port_1' -> 'Reflectance_port_1_0.045'
             rename_dict = {p: f"{p}_{label}" for p in params}
             dfs[label] = df.rename(columns=rename_dict)
             
     except FileNotFoundError as e:
         st.error(f"Error: {e}. Make sure all CSV files are in the same directory as the app.")
         return None, [], None, None
-
-    # Get available parameters (from the first file)
-    base_params = [col for col in dfs[list(dfs.keys())[0]].columns if col not in ['h_fib', 'lda0'] and not col.endswith(tuple(dfs.keys()))]
-    # Strip the suffixes we just added to get the base param names
-    base_params = list(sorted(list(set(p.split('_')[0] for p in params))))
+    except Exception as e:
+        st.error(f"An error occurred during file loading: {e}")
+        return None, [], None, None
 
     # Merge all dataframes
     df_merged = None
@@ -52,9 +60,10 @@ def load_data(file_dict):
     
     # Calculate difference columns
     for p in base_params:
-        p_045 = f"{p}_0.045"
-        p_05 = f"{p}_0.05"
-        p_07 = f"{p}_0.07"
+        # p is now the full name, e.g., 'Reflectance_port_1'
+        p_045 = f"{p}_0.045" # 'Reflectance_port_1_0.045'
+        p_05 = f"{p}_0.05"   # 'Reflectance_port_1_0.05'
+        p_07 = f"{p}_0.07"   # 'Reflectance_port_1_0.07'
         
         # Check if all columns exist before calculating diffs
         if all(col in df_merged.columns for col in [p_045, p_05, p_07]):
@@ -84,6 +93,7 @@ if df is not None:
     """)
 
     # --- 3. Sidebar Controls ---
+    # The 'params' list now correctly contains the full names
     selected_param = st.sidebar.selectbox("Select Parameter to Plot:", params)
     
     display_mode = st.sidebar.radio(
@@ -121,14 +131,18 @@ if df is not None:
 
     # --- 5. Data Pivoting ---
     @st.cache_data
-    def pivot_data(df, value_col):
+    def pivot_data(_df, value_col): # Changed df to _df to avoid shadowing
         try:
-            return df.pivot(index='h_fib', columns='lda0', values=value_col).values
+            return _df.pivot(index='h_fib', columns='lda0', values=value_col).values
         except Exception as e:
-            st.error(f"Error pivoting data for {value_col}: {e}")
+            # Provide a more informative error message
+            st.error(f"Error pivoting data for column '{value_col}': {e}")
+            if value_col not in _df.columns:
+                st.error(f"Column '{value_col}' was not found in the DataFrame.")
             return np.zeros((len(y_vals), len(x_vals)))
 
     # Pivot all necessary data
+    # 'selected_param' is now 'Reflectance_port_1' (or similar)
     z_data_1 = pivot_data(df, f"{selected_param}_0.045")
     z_data_2 = pivot_data(df, f"{selected_param}_0.05")
     z_data_3 = pivot_data(df, f"{selected_param}_0.07")
@@ -188,7 +202,7 @@ if df is not None:
         colorscale=colorscale,
         colorbar_title=selected_param,
         zmin=0 if "Diff" in display_mode or "Range" in display_mode else None,
-        zmax=z_data_range.max() if "Diff" in display_mode or "Range" in display_mode else None
+        zmax=z_data_range.max() if "Diff" in display_mode or "Range" in display_mode else (z_data_1.max() if "File" in display_mode else None) # Better auto-range for diffs
     ), row=2, col=1)
     
     # Add slider lines to heatmap
